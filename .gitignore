@@ -1,0 +1,30 @@
+﻿# Entorno virtual, no va a la nube
+.venv/
+__pycache__/
+*.pyc
+
+# Credenciales y secretos, NUNCA subir
+credenciales.json
+*.json
+!indice_padres.json
+.streamlit/secrets.toml
+
+# Respaldos y registros locales
+registro_piloto_respaldo.jsonl
+*.jsonl
+
+# La cocina del indice, trabajo sensible que no va al repo
+parser_estatuto.py
+chunking.py
+ingest.py
+
+# Archivos de evaluacion y experimentos
+juicio_humano*.json
+respuestas_*.json
+anotaciones.json
+calibrar_implicancia.py
+diagnostico_*.py
+probar_hoja.py
+hoja_etiquetado.py
+armar_juicio_humano.py
+puntuar_juicio.py

@@ -1,0 +1,10 @@
+# Versiones fijadas a las que corren en tu .venv, para que el deploy sea
+# reproducible y para que Streamlit no instale una chromadb distinta de la que
+# escribio el indice (eso rompe la lectura del chroma_db en silencio).
+streamlit==1.40.2
+groq==1.7.0
+chromadb==1.5.9
+rank-bm25==0.2.2
+sentence-transformers==6.0.0
+gspread==6.1.4
+google-auth==2.35.0

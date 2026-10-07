@@ -50,7 +50,7 @@ HOJA = "registro"  # nombre de la pestaña dentro de la hoja; se crea si no exis
 # Columnas de la hoja, en orden. Una fila por consulta. Las dos estrategias y
 # el detalle tecnico quedan como texto JSON en su celda, para no perder nada.
 COLUMNAS = [
-    "consulta_id", "momento_utc", "pregunta", "articulos_recuperados",
+    "codigo", "consulta_id", "momento_utc", "pregunta", "articulos_recuperados",
     "orden_A", "orden_B",
     "texto_A", "texto_B", "tecnico_A", "tecnico_B",
     "A_incorrecto", "A_falta", "A_detalle", "A_articulo",
@@ -62,6 +62,26 @@ COLUMNAS = [
 # el dato no se pierde (en tu maquina persiste; en la nube es un colchon hasta
 # el proximo reinicio). La hoja es la fuente principal.
 RUTA_RESPALDO = "registro_piloto_respaldo.jsonl"
+
+# Codigos de acceso de los revisores. Cada uno recibe un enlace con su codigo:
+#   https://TU-APP.streamlit.app/?codigo=SUTEBA01
+# El codigo queda en cada fila de la hoja, para saber quien hizo cada consulta.
+# Lleva aparte una lista de que codigo le diste a cada persona y su rol.
+CODIGOS_VALIDOS = {
+    "SUTEBA01", "SUTEBA02", "SUTEBA03", "SUTEBA04", "SUTEBA05",
+    "SUTEBA06", "SUTEBA07", "SUTEBA08", "SUTEBA09", "SUTEBA10",
+}
+
+
+def _codigo_revisor():
+    """Lee el ?codigo= del enlace. Devuelve el codigo si es valido, o None."""
+    try:
+        valor = st.query_params.get("codigo", "")
+    except Exception:
+        valor = ""
+    valor = (valor or "").strip().upper()
+    return valor if valor in CODIGOS_VALIDOS else None
+
 
 
 @st.cache_resource(show_spinner=False)
@@ -131,6 +151,7 @@ def _fila_a_columnas(fila):
     A, B = fila["respuesta_A"], fila["respuesta_B"]
     jA, jB = fila["juicio_A"], fila["juicio_B"]
     v = {
+        "codigo": fila.get("codigo", ""),
         "consulta_id": fila["consulta_id"],
         "momento_utc": fila["momento_utc"],
         "pregunta": fila["pregunta"],
@@ -227,6 +248,14 @@ except Exception as e:  # noqa: BLE001
     st.exception(e)
     st.stop()
 
+# Puerta de acceso: sin un codigo valido en el enlace, no se puede consultar.
+CODIGO = _codigo_revisor()
+if CODIGO is None:
+    st.warning("Para usar el asistente, entra con el enlace personal que te "
+               "enviaron. Si lo tenes y aun asi ves este mensaje, revisa que "
+               "el enlace este completo.")
+    st.stop()
+
 if "consulta" not in st.session_state:
     st.session_state.consulta = None
 
@@ -319,6 +348,7 @@ if c:
 
     if st.button("Guardar evaluacion", type="primary"):
         fila = {
+            "codigo": CODIGO,
             "consulta_id": c["id"],
             "momento_utc": datetime.now(timezone.utc).isoformat(),
             "pregunta": c["pregunta"],

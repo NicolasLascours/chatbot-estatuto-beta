@@ -47,6 +47,27 @@ except FileNotFoundError:
 SHEET_ID = "1omx3fUEKQc1nLz-k4MnMWX0Dva4ek2t3GX7kF4ZQgwc"
 HOJA = "registro"  # nombre de la pestaña dentro de la hoja; se crea si no existe
 
+# Version del motor que respondio. Sirve para separar evaluaciones de antes y
+# despues del aviso de incisos omitidos. Subila cuando cambie el motor.
+VERSION_MOTOR = "2026-10-15-aviso-incisos"
+
+# Tres preguntas de tipo de error, una vez por respuesta. Arrancan en "—"
+# (sin responder) a proposito: si arrancaran en "No", quien no las mira dejaria
+# un "No" que nadie decidio y la tasa de error saldria falsamente baja.
+_PREGUNTAS_TIPO_ERROR = [
+    ("afirmo_falso", "Afirmo algo falso?",
+     "Alguna afirmacion contradice la norma o no esta respaldada por el texto "
+     "citado. Incluye aplicar una regla a quien no le corresponde y usar un "
+     "plazo o tope de otro inciso."),
+    ("omitio_condicion", "Omitio una condicion o excepcion pertinente?",
+     "Falta una condicion, excepcion o salvedad que cambia la respuesta para "
+     "este caso (por ejemplo, que la regla vale solo para titulares, o una "
+     "excepcion para suplentes)."),
+    ("parafrasis_infiel", "Parafraseo de forma infiel?",
+     "Reformula el texto cambiando su sentido o alcance (verbo, plazo, sujeto, "
+     "'puede' por 'debe'), aunque la conclusion no termine siendo falsa."),
+]
+
 # Columnas de la hoja, en orden. Una fila por consulta. Las dos estrategias y
 # el detalle tecnico quedan como texto JSON en su celda, para no perder nada.
 COLUMNAS = [
@@ -55,7 +76,10 @@ COLUMNAS = [
     "texto_A", "texto_B", "tecnico_A", "tecnico_B",
     "A_incorrecto", "A_falta", "A_detalle", "A_articulo",
     "B_incorrecto", "B_falta", "B_detalle", "B_articulo",
-    "cual_usaria", "comentario",
+    "cual_usaria", "comentario", "contexto_enviado",
+    "A_afirmo_falso", "A_omitio_condicion", "A_parafrasis_infiel",
+    "B_afirmo_falso", "B_omitio_condicion", "B_parafrasis_infiel",
+    "version_motor",
 ]
 
 # Respaldo local SIEMPRE, ademas de la hoja: si Google falla por lo que sea,
@@ -119,8 +143,8 @@ def _abrir_hoja():
         except Exception:
             hoja = libro.add_worksheet(title=HOJA, rows=1000, cols=len(COLUMNAS))
         # Encabezados: los escribe una sola vez, si la primera fila esta vacia.
-        if not hoja.row_values(1):
-            hoja.update("A1", [COLUMNAS])
+        if hoja.row_values(1) != COLUMNAS:
+            hoja.update(range_name="A1", values=[COLUMNAS])
         return hoja, None
     except Exception as e:  # noqa: BLE001
         return None, f"No pude conectar con la hoja: {e}"
@@ -143,7 +167,26 @@ def _generar_dos_respuestas(pregunta, motor, groq):
     r_asistente = responder(pregunta, resultado, groq)
     r_buscador = responder_buscador(pregunta, resultado, groq)
     arts = [a["numero"] for a in resultado.articulos]
-    return resultado, r_asistente, r_buscador, arts
+    # Texto de cada articulo recuperado, para mostrarselo al revisor como
+    # fuente. Se guarda solo en la sesion, no en la hoja (alli van los numeros).
+    fuentes = [{
+        "numero": a["numero"],
+        "capitulo": a.get("capitulo_num", "?"),
+        "ley": (a.get("ley") or "").strip(),
+        "reglamentacion": (a.get("reglamentacion") or "").strip(),
+    } for a in resultado.articulos]
+    # El texto que efectivamente se le da al sistema (con el presupuesto de
+    # caracteres aplicado). Se guarda en la hoja, porque para diagnosticar una
+    # respuesta mala hace falta saber si el dato llego o no al generador.
+    contexto_texto = ""
+    try:
+        from generacion import construir_contexto, PRESUPUESTO_CONTEXTO_CHARS
+        if resultado.articulos:
+            contexto_texto = construir_contexto(
+                resultado.articulos, PRESUPUESTO_CONTEXTO_CHARS).texto
+    except Exception:
+        contexto_texto = ""
+    return resultado, r_asistente, r_buscador, arts, fuentes, contexto_texto
 
 
 def _fila_a_columnas(fila):
@@ -166,6 +209,15 @@ def _fila_a_columnas(fila):
         "B_incorrecto": jB["incorrecto"], "B_falta": jB["falta"],
         "B_detalle": jB["detalle"], "B_articulo": jB["articulo"],
         "cual_usaria": fila["cual_usaria"], "comentario": fila["comentario"],
+        # Limite de una celda de Google Sheets: 50.000 caracteres.
+        "contexto_enviado": (fila.get("contexto") or "")[:45000],
+        "A_afirmo_falso": jA.get("afirmo_falso", ""),
+        "A_omitio_condicion": jA.get("omitio_condicion", ""),
+        "A_parafrasis_infiel": jA.get("parafrasis_infiel", ""),
+        "B_afirmo_falso": jB.get("afirmo_falso", ""),
+        "B_omitio_condicion": jB.get("omitio_condicion", ""),
+        "B_parafrasis_infiel": jB.get("parafrasis_infiel", ""),
+        "version_motor": fila.get("version_motor", ""),
     }
     return [v.get(col, "") for col in COLUMNAS]
 
@@ -189,14 +241,36 @@ def _guardar_fila(fila):
         return False, f"{e} (quedo en el respaldo local)"
 
 
-def _bloque_respuesta(letra, texto, arts_excluidos):
+def _bloque_respuesta(letra, texto):
     st.markdown(f"#### Respuesta {letra}")
     st.write(texto)
-    with st.expander("Ver los articulos (fuente)"):
-        if arts_excluidos:
-            st.caption("Algun articulo relevante no entro completo por espacio: "
-                       + ", ".join(f"Art. {n}" for n in arts_excluidos))
-        st.caption("Las citas [ARTICULO N, CAP. M] remiten al texto del Estatuto.")
+
+
+def _bloque_fuentes(c):
+    """Fuentes compartidas: las dos respuestas se armaron sobre la MISMA
+    evidencia, asi que se muestra una sola vez, debajo de las dos respuestas."""
+    fuentes = c.get("fuentes", [])
+    st.markdown("### Artículos consultados (fuente)")
+    st.caption("Estos son los artículos en los que se basaron las dos respuestas. "
+               "Las citas [ARTÍCULO N, CAP. M] remiten a ellos. Abrí el que quieras "
+               "verificar.")
+    excluidos = sorted(set(c["A"]["excluidos"]) | set(c["B"]["excluidos"]))
+    if excluidos:
+        st.caption("Estos artículos fueron encontrados pero no entraron completos "
+                   "en lo que leyó el sistema por límite de espacio: "
+                   + ", ".join(f"Art. {n}" for n in excluidos) + ".")
+    with st.expander("Ver el texto de los artículos"):
+        for f in fuentes:
+            st.markdown(f"**Artículo {f['numero']}** (capítulo {f['capitulo']})")
+            if f["ley"]:
+                st.text_area("Texto del artículo", f["ley"], height=180,
+                             disabled=True, key=f"src_{c['id']}_{f['numero']}_ley")
+            reg = f["reglamentacion"]
+            if reg and reg.strip().lower().rstrip(".") != "sin reglamentar":
+                st.text_area("Reglamentación", reg, height=180, disabled=True,
+                             key=f"src_{c['id']}_{f['numero']}_reg")
+            else:
+                st.caption("Este artículo no tiene reglamentación.")
 
 
 def _form_juicio(letra, key):
@@ -215,8 +289,15 @@ def _form_juicio(letra, key):
             "Que esta mal o que falta? (opcional)", key=f"det_{key}", height=80)
         articulo = st.text_input(
             "Sabes que articulo corresponde? (opcional)", key=f"art_{key}")
+    st.caption("Tipo de error en esta respuesta (marca las tres):")
+    tipos = {}
+    for clave, pregunta, ayuda in _PREGUNTAS_TIPO_ERROR:
+        tipos[clave] = st.radio(
+            pregunta, ["—", "Si", "No"], index=0,
+            key=f"{clave}_{key}", horizontal=True, help=ayuda)
     return {"incorrecto": incorrecto, "falta": falta,
-            "detalle": detalle.strip(), "articulo": articulo.strip()}
+            "detalle": detalle.strip(), "articulo": articulo.strip(),
+            **tipos}
 
 
 # ---------------------------------------------------------------- UI
@@ -276,8 +357,8 @@ if nueva:
 if consultar and pregunta.strip():
     with st.spinner("Buscando en el Estatuto y generando las dos respuestas..."):
         try:
-            resultado, r_asis, r_busc, arts = _generar_dos_respuestas(
-                pregunta, motor, groq)
+            (resultado, r_asis, r_busc, arts, fuentes,
+             contexto_texto) = _generar_dos_respuestas(pregunta, motor, groq)
         except Exception as e:  # noqa: BLE001
             st.error("Error al generar las respuestas.")
             st.exception(e)
@@ -294,6 +375,8 @@ if consultar and pregunta.strip():
         "id": str(uuid.uuid4())[:8],
         "pregunta": pregunta.strip(),
         "articulos_recuperados": arts,
+        "fuentes": fuentes,
+        "contexto": contexto_texto,
         "orden": {"A": a_estrategia, "B": b_estrategia},
         "A": {
             "estrategia": a_estrategia,
@@ -324,9 +407,12 @@ if c:
 
     izq, der = st.columns(2)
     with izq:
-        _bloque_respuesta("A", c["A"]["texto"], c["A"]["excluidos"])
+        _bloque_respuesta("A", c["A"]["texto"])
     with der:
-        _bloque_respuesta("B", c["B"]["texto"], c["B"]["excluidos"])
+        _bloque_respuesta("B", c["B"]["texto"])
+
+    st.divider()
+    _bloque_fuentes(c)
 
     st.divider()
     st.markdown("### Tu evaluacion")
@@ -347,12 +433,24 @@ if c:
                               key="com_" + c["id"], height=80)
 
     if st.button("Guardar evaluacion", type="primary"):
+        # Las tres preguntas de tipo de error son obligatorias (arrancan en "—").
+        sin_responder = [
+            clave for juicio in (juicio_a, juicio_b)
+            for clave, _, _ in _PREGUNTAS_TIPO_ERROR
+            if juicio.get(clave) == "—"
+        ]
+        if sin_responder:
+            st.warning("Te faltan preguntas de tipo de error por responder en "
+                       "alguna de las dos respuestas.")
+            st.stop()
         fila = {
             "codigo": CODIGO,
+            "version_motor": VERSION_MOTOR,
             "consulta_id": c["id"],
             "momento_utc": datetime.now(timezone.utc).isoformat(),
             "pregunta": c["pregunta"],
             "articulos_recuperados": c["articulos_recuperados"],
+            "contexto": c.get("contexto", ""),
             "orden": c["orden"],
             "respuesta_A": c["A"],
             "respuesta_B": c["B"],

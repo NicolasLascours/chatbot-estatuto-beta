@@ -398,7 +398,8 @@ def _bloque_parcial(
 
     partes_incluidas: list[str] = []
     chars_grupos = 0
-    for g in candidatos:
+    omitidos: list[dict] = []
+    for i, g in enumerate(candidatos):
         marker = g.get("marker", "")
         cuerpo = g["texto"].strip()
         bloque_grupo = f"[INCISO {marker}] {cuerpo}" if marker else cuerpo
@@ -407,13 +408,88 @@ def _bloque_parcial(
             if not partes_incluidas:
                 # Ni el encabezado entró — no hay versión parcial posible.
                 return "", 0
+            omitidos = candidatos[i:]
             break
         partes_incluidas.append(bloque_grupo)
         chars_grupos += costo
 
+    # Aviso de incisos ganadores que quedaron afuera por espacio, con su
+    # título de la ley, para que el modelo pueda decir "existe pero no lo
+    # tengo" en vez de responder con un inciso vecino. Solo si entra en el
+    # presupuesto; si no entra entero, se recorta la lista.
+    aviso = _aviso_omitidos(
+        art, omitidos,
+        presupuesto_restante - costo_fijo - chars_grupos - 1,
+    )
+    if aviso:
+        partes_incluidas.append(aviso)
+        chars_grupos += len(aviso) + 1
+
     cuerpo_final = "\n".join(partes_incluidas)
     texto = f"{etiqueta}\n{_AVISO_PARCIAL}\n{cuerpo_final}"
     return texto, costo_fijo + chars_grupos
+
+
+_LARGO_MAX_TITULO = 90
+
+
+def _titulo_inciso(art: dict, grupo: dict) -> str:
+    """Título legible de un inciso omitido. Preferimos el texto de la LEY
+    del mismo inciso (en el 114 son frases cortas tipo "Por enfermedad o
+    accidente de trabajo."), emparejando por letra sin distinguir
+    mayúscula/minúscula porque la reglamentación usa "G", "H"... donde la
+    ley usa "g", "h". Si no hay inciso de ley con esa letra (incisos
+    numerados o romanos de la reglamentación), usamos el comienzo del
+    propio texto del grupo."""
+    marker = (grupo.get("marker") or "").lower()
+    candidato = ""
+    if marker:
+        for g_ley in art.get("ley_grupos", []):
+            if (g_ley.get("marker") or "").lower() == marker:
+                candidato = g_ley["texto"]
+                break
+    if not candidato:
+        candidato = grupo["texto"]
+    candidato = " ".join(candidato.split())
+    if len(candidato) > _LARGO_MAX_TITULO:
+        candidato = candidato[:_LARGO_MAX_TITULO].rstrip() + "…"
+    return candidato
+
+
+def _aviso_omitidos(art: dict, omitidos: list[dict], disponible: int) -> str:
+    """Bloque que lista los incisos ganadores omitidos por espacio. Devuelve
+    "" si no hay omitidos o si ni la cabecera del aviso entra en
+    `disponible` caracteres. Si no entran todos los títulos, recorta la
+    lista y lo indica."""
+    if not omitidos:
+        return ""
+    cabecera = (
+        "[INCISOS OMITIDOS POR ESPACIO — dato del sistema, no texto del "
+        "Estatuto] Estos incisos existen y resultaron relevantes para la "
+        "pregunta, pero su texto NO está en este extracto. Si la consulta "
+        "trata sobre alguno de ellos, decí que existe pero que su texto no "
+        "está en el fragmento disponible; no uses otro inciso en su lugar "
+        "ni completes su contenido:"
+    )
+    lineas: list[str] = []
+    vistos: set[tuple[str, str]] = set()
+    for g in omitidos:
+        marker = g.get("marker") or ""
+        titulo = _titulo_inciso(art, g)
+        if (marker, titulo) in vistos:
+            continue
+        vistos.add((marker, titulo))
+        etiqueta = f"inciso {marker}" if marker else "texto sin inciso"
+        lineas.append(f"- {etiqueta}: {titulo}")
+
+    for n in range(len(lineas), -1, -1):
+        partes = [cabecera] + lineas[:n]
+        if n < len(lineas):
+            partes.append(f"- (y {len(lineas) - n} inciso(s) más)")
+        aviso = "\n".join(partes)
+        if len(aviso) <= disponible:
+            return aviso
+    return ""
 
 
 _TIPOS_LETRA = {

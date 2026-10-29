@@ -49,7 +49,7 @@ HOJA = "registro"  # nombre de la pestaña dentro de la hoja; se crea si no exis
 
 # Version del motor que respondio. Sirve para separar evaluaciones de antes y
 # despues del aviso de incisos omitidos. Subila cuando cambie el motor.
-VERSION_MOTOR = "2026-10-15-aviso-incisos"
+VERSION_MOTOR = "2026-10-28-fix-mayusculas-regex-cap6"
 
 # Tres preguntas de tipo de error, una vez por respuesta. Arrancan en "—"
 # (sin responder) a proposito: si arrancaran en "No", quien no las mira dejaria

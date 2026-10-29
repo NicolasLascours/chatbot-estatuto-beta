@@ -104,7 +104,19 @@ TOP_ARTICULOS = 5       # artículos padre devueltos tras Small2Big
 
 # Detecta menciones explícitas a un número de artículo, con o sin acento,
 # con o sin abreviatura: "artículo 114", "articulo 114", "art. 114", "art 114".
-PATRON_ARTICULO = re.compile(r"art(?:[íi]culo)?\.?\s*n?[ºo°]?\s*(\d+)", re.IGNORECASE)
+# Enumeraciones de artículos ("114 y 115", "114, 115 y 116", "114, ¿y el 115?").
+# Un número seguido de una unidad ("20 días", "3 años") no cuenta como artículo.
+_SEP_ENUM = r"(?:\s*,\s*¿?\s*(?:[ye]\s+)?(?:el\s+|los\s+)?|\s+[ye]\s+(?:el\s+|los\s+)?)"
+_NO_CANTIDAD = r"(?!\d)(?!\s*(?:d[ií]as?|horas?|a[ñn]os?|mes(?:es)?|puntos?|%))"
+PATRON_ARTICULO = re.compile(
+    r"\bart(?:[íi]culo)?s?\.?\s*n?[ºo°]?\s*(\d+(?:" + _SEP_ENUM + r"\d+" + _NO_CANTIDAD + r")*)",
+    re.IGNORECASE,
+)
+
+
+def _numeros_de_articulos(texto: str) -> list[str]:
+    return [n for grupo in PATRON_ARTICULO.findall(texto) for n in re.findall(r"\d+", grupo)]
+
 # El atajo directo solo debe dispararse cuando la pregunta realmente pide "qué
 # dice el artículo N", señalado por marco de autoridad ("según/conforme/de
 # acuerdo ... artículo N"). Sin esto, cualquier escenario que mencione un
@@ -151,6 +163,15 @@ _CONTEXTO_EXTRA_CAPITULOS: dict[int, str] = {
         "sobre su situación, la respuesta suele estar en el capítulo 2 "
         "o el 20, NO acá, aunque la pregunta use la palabra "
         "\"estabilidad\")"
+    ),
+    6: (
+        " (regula qué pasa cuando a un docente titular se le suprime el "
+        "cargo, la asignatura o parte de la carga horaria: entra en "
+        "situación de disponibilidad. La disponibilidad NO es un cese: el "
+        "docente mantiene el derecho a su carga horaria y se lo reubica en "
+        "la primera vacante. Consultalo cuando la pregunta mencione cierre "
+        "de curso, supresión de horas, pérdida de horas, disminución de "
+        "carga horaria o reubicación de un docente titular)"
     ),
     10: (
         " (acá se calcula el puntaje docente: títulos, antecedentes, "
@@ -366,7 +387,7 @@ class MotorRecuperacion:
         # completo, que además fuerza el capítulo del artículo citado (ver
         # _capitulos_de_articulos_citados y buscar()).
         nums: list[str] = []
-        for n in PATRON_ARTICULO.findall(pregunta):
+        for n in _numeros_de_articulos(pregunta):
             if n not in nums:
                 nums.append(n)
         if len(nums) != 1 or _MARCA_LOOKUP_DIRECTO.search(pregunta) is None:
@@ -388,7 +409,7 @@ class MotorRecuperacion:
         28 citado -> cap. 7, donde vive el 30; N3-10: art. 18 citado -> cap.
         5)."""
         caps: list[int] = []
-        for n in PATRON_ARTICULO.findall(pregunta):
+        for n in _numeros_de_articulos(pregunta):
             padre = self._padres.get(f"art_{n}")
             if padre is not None:
                 c = padre["capitulo_num"]
@@ -410,6 +431,7 @@ class MotorRecuperacion:
                 ],
                 response_format={"type": "json_object"},
                 temperature=self._temperatura_clasificacion,
+                **({"reasoning_effort": "low"} if "gpt-oss" in self._modelo_groq else {}),
             )
             return resp.choices[0].message.content
         else:  # "gemini"
@@ -1160,7 +1182,7 @@ class MotorRecuperacion:
             return ResultadoBusqueda(diagnostico=diag, articulos=[directo])
 
         # Paso 1
-        clasificacion = self._hyde_y_clasificar(pregunta)
+        clasificacion = self._hyde_y_clasificar(pregunta.lower())
         capitulos = clasificacion["capitulos_probables"]
         confianza = clasificacion["confianza"]
         hyde_doc = clasificacion["documento_hipotetico"]

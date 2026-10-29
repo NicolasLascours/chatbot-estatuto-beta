@@ -89,7 +89,11 @@ MAX_TOKENS_RESPUESTA = 900
 MENSAJE_NO_ENCONTRADO = (
     "No encontré en los artículos recuperados información suficiente para "
     "responder esta consulta con respaldo normativo. Podés reformular la "
-    "pregunta o consultar directamente la normativa correspondiente."
+    "pregunta con otras palabras. Si después de reformular seguís sin "
+    "obtener respuesta, puede tratarse de un tema regulado por normativa "
+    "complementaria (resoluciones, acuerdos paritarios, leyes especiales) "
+    "que este sistema no tiene indexada. En ese caso, te recomendamos "
+    "consultar con el gremio o con la Dirección de Educación correspondiente."
 )
 
 _DESCRIPCION_ESTADO = {
@@ -187,7 +191,11 @@ prevé", "no contempla" o "no otorga" algo, porque vos no sabés si la \
 ley lo prevé, solo sabés que no lo tenés delante. Si la pregunta tiene \
 varias partes, respondé las respaldadas y nombrá cuáles no pudiste \
 responder. Si el contexto describe un mecanismo pero no un valor \
-concreto, no inventes el valor.
+concreto, no inventes el valor. Si después de intentar responder seguís \
+sin encontrar la información, cerrá con esta frase: "Si reformulando la \
+pregunta no obtenés respuesta, puede tratarse de normativa complementaria \
+que este sistema no tiene indexada. Te recomendamos consultar con el \
+gremio o con la Dirección de Educación correspondiente."
 
 FIDELIDAD AL TEXTO
 

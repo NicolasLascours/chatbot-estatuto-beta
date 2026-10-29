@@ -80,6 +80,11 @@ COLUMNAS = [
     "A_afirmo_falso", "A_omitio_condicion", "A_parafrasis_infiel",
     "B_afirmo_falso", "B_omitio_condicion", "B_parafrasis_infiel",
     "version_motor",
+    # Datos del clasificador de capitulos y del retrieval. Van al final: la hoja
+    # se escribe por posicion, asi que no se puede insertar nada antes de
+    # version_motor.
+    "clasificador_respaldo", "clasificador_capitulos", "clasificador_confianza",
+    "retrieval_modo", "retrieval_mejor_similitud",
 ]
 
 # Respaldo local SIEMPRE, ademas de la hoja: si Google falla por lo que sea,
@@ -159,6 +164,35 @@ def cargar_motor():
     return motor, groq
 
 
+_CLASIFICADOR_POR_DEFECTO = {"respaldo": "no_aplica", "capitulos": None, "confianza": None,
+                             "modo": None, "mejor_similitud": None}
+
+
+def _datos_clasificador(resultado, pregunta):
+    """Que devolvio el clasificador de capitulos y el retrieval para esta
+    consulta. Nunca lanza: ante cualquier problema devuelve todo por defecto.
+    respaldo: "uso_respaldo" si el documento hipotetico es la propia pregunta
+    (el LLM no devolvio uno utilizable), "no_uso_respaldo" si es uno real, y
+    "no_aplica" si no hubo llamada al LLM (atajo por articulo) o no hay dato.
+    modo y mejor_similitud salen de resultado.diagnostico (similitud a 3
+    decimales). No guarda el documento hipotetico."""
+    try:
+        diag = resultado.diagnostico
+        modo = None if diag.modo is None else str(diag.modo)
+        similitud = None if diag.mejor_similitud is None else round(float(diag.mejor_similitud), 3)
+        datos = dict(_CLASIFICADOR_POR_DEFECTO, modo=modo, mejor_similitud=similitud)
+        if diag.modo == "identificador_directo" or diag.documento_hipotetico is None:
+            return datos
+        usado = diag.documento_hipotetico.strip().lower() == pregunta.strip().lower()
+        capitulos = None if diag.capitulos_elegidos is None else list(diag.capitulos_elegidos)
+        confianza = None if diag.confianza_capitulo is None else str(diag.confianza_capitulo)[:20]
+        datos.update(respaldo="uso_respaldo" if usado else "no_uso_respaldo",
+                     capitulos=capitulos, confianza=confianza)
+        return datos
+    except Exception:
+        return dict(_CLASIFICADOR_POR_DEFECTO)
+
+
 def _generar_dos_respuestas(pregunta, motor, groq):
     """Una recuperacion, dos estrategias sobre la misma evidencia."""
     from generacion import responder
@@ -187,6 +221,21 @@ def _generar_dos_respuestas(pregunta, motor, groq):
     except Exception:
         contexto_texto = ""
     return resultado, r_asistente, r_buscador, arts, fuentes, contexto_texto
+
+
+def _celdas_clasificador(fila):
+    """Las cinco celdas nuevas de la hoja. Si algo falla, quedan vacias y el
+    resto de la fila se escribe igual. Una fila vieja (sin las claves) da vacio."""
+    try:
+        capitulos = fila.get("clasificador_capitulos")
+        similitud = fila.get("retrieval_mejor_similitud")
+        return (fila.get("clasificador_respaldo") or "",
+                "" if capitulos is None else json.dumps(capitulos, ensure_ascii=False),
+                fila.get("clasificador_confianza") or "",
+                fila.get("retrieval_modo") or "",
+                "" if similitud is None else similitud)
+    except Exception:
+        return "", "", "", "", ""
 
 
 def _fila_a_columnas(fila):
@@ -219,6 +268,9 @@ def _fila_a_columnas(fila):
         "B_parafrasis_infiel": jB.get("parafrasis_infiel", ""),
         "version_motor": fila.get("version_motor", ""),
     }
+    (v["clasificador_respaldo"], v["clasificador_capitulos"],
+     v["clasificador_confianza"], v["retrieval_modo"],
+     v["retrieval_mejor_similitud"]) = _celdas_clasificador(fila)
     return [v.get(col, "") for col in COLUMNAS]
 
 
@@ -364,6 +416,8 @@ if consultar and pregunta.strip():
             st.exception(e)
             st.stop()
 
+    clasificador = _datos_clasificador(resultado, pregunta)
+
     if random.random() < 0.5:
         a_estrategia, a_resp = "asistente", r_asis
         b_estrategia, b_resp = "buscador", r_busc
@@ -377,6 +431,7 @@ if consultar and pregunta.strip():
         "articulos_recuperados": arts,
         "fuentes": fuentes,
         "contexto": contexto_texto,
+        "clasificador": clasificador,
         "orden": {"A": a_estrategia, "B": b_estrategia},
         "A": {
             "estrategia": a_estrategia,
@@ -443,6 +498,7 @@ if c:
             st.warning("Te faltan preguntas de tipo de error por responder en "
                        "alguna de las dos respuestas.")
             st.stop()
+        clasif = c.get("clasificador") or _CLASIFICADOR_POR_DEFECTO
         fila = {
             "codigo": CODIGO,
             "version_motor": VERSION_MOTOR,
@@ -458,6 +514,11 @@ if c:
             "juicio_B": juicio_b,
             "cual_usaria": cual,
             "comentario": comentario.strip(),
+            "clasificador_respaldo": clasif.get("respaldo", "no_aplica"),
+            "clasificador_capitulos": clasif.get("capitulos"),
+            "clasificador_confianza": clasif.get("confianza"),
+            "retrieval_modo": clasif.get("modo"),
+            "retrieval_mejor_similitud": clasif.get("mejor_similitud"),
         }
         ok, err = _guardar_fila(fila)
         if ok:
